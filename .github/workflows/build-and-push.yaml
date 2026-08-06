@@ -96,6 +96,6 @@ jobs:
           
           git checkout main
           git add services/*/helm/values-dev.yaml
-          git commit -m "chore: update images to version ${{ steps.version.outputs.version }} for DEV" || echo "No changes to commit"
+          git commit -m "chore: update images to version ${{ steps.version.outputs.version }} for DEV [skip ci]" || echo "No changes to commit"
           git pull --rebase origin main
           git push origin main
