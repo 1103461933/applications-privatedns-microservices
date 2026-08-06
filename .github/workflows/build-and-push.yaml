@@ -6,7 +6,7 @@ on:
       - main
     paths:
       - 'services/**'
-      - '!services/**/helm/**' # EVITA EL BUCLE INFINITO
+      - '!services/**/helm/**'
   workflow_dispatch:
     inputs:
       service:
@@ -24,14 +24,12 @@ on:
         type: string
         default: '1.0.0'
 
-env:
-  DOCKER_USERNAME: ${{ secrets.DOCKER_USERNAME }}
-  DOCKER_PASSWORD: ${{ secrets.DOCKER_PASSWORD }}
-
 jobs:
-  # JOB 1: DETERMINAR QUÉ SERVICIOS CONSTRUIR
+  # JOB 1: SETUP - Determinamos servicios y versión
+  # Cargamos el ambiente aquí también por si hay variables de entorno específicas
   setup:
     runs-on: ubuntu-latest
+    environment: dev
     outputs:
       services: ${{ steps.set-services.outputs.services }}
       version: ${{ steps.set-version.outputs.version }}
@@ -52,10 +50,11 @@ jobs:
             echo "version=${GITHUB_SHA::7}" >> $GITHUB_OUTPUT
           fi
 
-  # JOB 2: CONSTRUCCIÓN (EN PARALELO SEGÚN LA MATRIX)
+  # JOB 2: BUILD AND PUSH - Usa matrix para ser rápido
   build-and-push:
     needs: setup
     runs-on: ubuntu-latest
+    environment: dev # CARGA DE AMBIENTE PARA DOCKER_USERNAME/PASSWORD
     strategy:
       matrix:
         service: ${{ fromJSON(needs.setup.outputs.services) }}
@@ -70,8 +69,8 @@ jobs:
       - name: Login to Docker Hub
         uses: docker/login-action@v2
         with:
-          username: ${{ env.DOCKER_USERNAME }}
-          password: ${{ env.DOCKER_PASSWORD }}
+          username: ${{ secrets.DOCKER_USERNAME }}
+          password: ${{ secrets.DOCKER_PASSWORD }}
 
       - name: Build and push
         uses: docker/build-push-action@v4
@@ -79,13 +78,14 @@ jobs:
           context: services/${{ matrix.service }}
           push: true
           tags: |
-            ${{ env.DOCKER_USERNAME }}/${{ matrix.service }}:${{ needs.setup.outputs.version }}
-            ${{ env.DOCKER_USERNAME }}/${{ matrix.service }}:latest
+            ${{ secrets.DOCKER_USERNAME }}/${{ matrix.service }}:${{ needs.setup.outputs.version }}
+            ${{ secrets.DOCKER_USERNAME }}/${{ matrix.service }}:latest
 
-  # JOB 3: ACTUALIZAR HELM (UN SOLO COMMIT AL FINAL PARA EVITAR CONFLICTOS)
+  # JOB 3: UPDATE HELM - Un solo commit final para evitar inconsistencias
   update-helm:
     needs: [setup, build-and-push]
     runs-on: ubuntu-latest
+    environment: dev # CARGA DE AMBIENTE PARA EL PAT_TOKEN
     steps:
       - name: Checkout code
         uses: actions/checkout@v3
@@ -95,11 +95,10 @@ jobs:
       - name: Update Helm tags
         run: |
           VERSION="${{ needs.setup.outputs.version }}"
-          # Convertimos el string JSON de servicios en un array de bash
           SERVICES_JSON='${{ needs.setup.outputs.services }}'
-          SERVICES=$(echo $SERVICES_JSON | jq -r '.[]')
           
-          for SERVICE in $SERVICES; do
+          # jq procesa la lista de servicios que calculamos en el setup
+          for SERVICE in $(echo $SERVICES_JSON | jq -r '.[]'); do
             VALUES_FILE="services/${SERVICE}/helm/values-dev.yaml"
             if [ -f "$VALUES_FILE" ]; then
               sed -i "s/tag: .*/tag: \"${VERSION}\"/" $VALUES_FILE
@@ -115,5 +114,6 @@ jobs:
           git add services/*/helm/values-dev.yaml
           git commit -m "chore: update images to version ${{ needs.setup.outputs.version }} [skip ci]" || echo "No changes to commit"
           
+          # Pull rebase por si otro workflow terminó justo antes
           git pull --rebase origin main
           git push origin main
