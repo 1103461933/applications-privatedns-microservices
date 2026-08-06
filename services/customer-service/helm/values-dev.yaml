@@ -2,7 +2,7 @@ replicaCount: 1
 
 image:
   repository: yourusername/customer-service
-  tag: "34d5638"
+  tag: "5a13205"
   pullPolicy: Always
 
 ingress:
