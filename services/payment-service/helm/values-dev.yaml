@@ -2,7 +2,7 @@ replicaCount: 1
 
 image:
   repository: yourusername/payment-service
-  tag: "dcd3410"
+  tag: "6fd85f0"
   pullPolicy: Always
 
 ingress:
