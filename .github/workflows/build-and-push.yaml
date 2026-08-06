@@ -1,0 +1,107 @@
+name: Build and Push Docker Image
+
+on:
+  push:
+    branches:
+      - dev
+      - main
+    paths:
+      - 'services/**'
+  workflow_dispatch:
+    inputs:
+      service:
+        description: 'Service to build'
+        required: true
+        type: choice
+        options:
+          - booking-service
+          - payment-service
+          - customer-service
+      version:
+        description: 'Version tag (e.g., 1.0.0)'
+        required: true
+        type: string
+        default: '1.0.0'
+
+env:
+  DOCKER_USERNAME: ${{ secrets.DOCKER_USERNAME }}
+  DOCKER_PASSWORD: ${{ secrets.DOCKER_PASSWORD }}
+
+jobs:
+  build-and-push:
+    runs-on: ubuntu-latest
+
+    strategy:
+      matrix:
+        service:
+          - booking-service
+          - payment-service
+          - customer-service
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v3
+        with:
+          token: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v2
+
+      - name: Login to Docker Hub
+        uses: docker/login-action@v2
+        with:
+          username: ${{ env.DOCKER_USERNAME }}
+          password: ${{ env.DOCKER_PASSWORD }}
+
+      - name: Get version
+        id: version
+        run: |
+          if [ "${{ github.event_name }}" == "workflow_dispatch" ]; then
+            VERSION="${{ github.event.inputs.version }}"
+          else
+            VERSION="${GITHUB_SHA::7}"
+          fi
+          echo "version=$VERSION" >> $GITHUB_OUTPUT
+          echo "tag=${VERSION}" >> $GITHUB_OUTPUT
+
+      - name: Build and push
+        uses: docker/build-push-action@v4
+        with:
+          context: services/${{ matrix.service }}
+          push: true
+          tags: |
+            ${{ env.DOCKER_USERNAME }}/${{ matrix.service }}:${{ steps.version.outputs.version }}
+            ${{ env.DOCKER_USERNAME }}/${{ matrix.service }}:latest
+
+      - name: Update Helm values
+        if: github.event_name == 'workflow_dispatch'
+        uses: actions/github-script@v6
+        with:
+          script: |
+            const service = '${{ github.event.inputs.service }}';
+            const version = '${{ steps.version.outputs.version }}';
+            const fs = require('fs');
+            const yaml = require('js-yaml');
+            
+            // Actualizar values-dev.yaml
+            const valuesFile = `services/${service}/helm/values-dev.yaml`;
+            let doc = yaml.load(fs.readFileSync(valuesFile, 'utf8'));
+            doc.image.tag = version;
+            fs.writeFileSync(valuesFile, yaml.dump(doc));
+            
+            // Actualizar values-prod.yaml
+            const prodFile = `services/${service}/helm/values-prod.yaml`;
+            if (fs.existsSync(prodFile)) {
+              let prod = yaml.load(fs.readFileSync(prodFile, 'utf8'));
+              prod.image.tag = version;
+              fs.writeFileSync(prodFile, yaml.dump(prod));
+            }
+
+      - name: Commit and push changes
+        if: github.event_name == 'workflow_dispatch'
+        run: |
+          git config user.name "GitHub Actions Bot"
+          git config user.email "actions@github.com"
+          git add services/*/helm/values-*.yaml
+          git commit -m "chore: update images to ${{ steps.version.outputs.version }}" || echo "No changes to commit"
+          git push

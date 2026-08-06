@@ -1,0 +1,131 @@
+apiVersion: argoproj.io/v1alpha1
+kind: Workflow
+metadata:
+  generateName: deploy-service-
+  namespace: argo-workflows
+  labels:
+    type: deployment
+spec:
+  serviceAccountName: argo-workflow-sa
+  entrypoint: deploy
+  
+  arguments:
+    parameters:
+      - name: service
+        value: "booking-service"
+      - name: environment
+        value: "dev"
+      - name: version
+        value: "1.0.0"
+  
+  templates:
+    - name: deploy
+      steps:
+        - - name: validate-image
+            template: validate-image
+        - - name: update-values
+            template: update-values
+        - - name: commit-push
+            template: commit-push
+        - - name: wait-sync
+            template: wait-argocd-sync
+    
+    - name: validate-image
+      script:
+        image: alpine/curl:latest
+        command: [sh]
+        source: |
+          SERVICE="{{workflow.parameters.service}}"
+          VERSION="{{workflow.parameters.version}}"
+          USERNAME="yourusername"
+          
+          echo "🔍 Validando imagen: ${USERNAME}/${SERVICE}:${VERSION}"
+          
+          RESPONSE=$(curl -s -o /dev/null -w "%{http_code}" \
+            https://hub.docker.com/v2/repositories/${USERNAME}/${SERVICE}/tags/${VERSION})
+          
+          if [ "$RESPONSE" != "200" ]; then
+            echo "❌ Imagen no encontrada en Docker Hub (HTTP $RESPONSE)"
+            exit 1
+          fi
+          
+          echo "✅ Imagen validada correctamente"
+    
+    - name: update-values
+      script:
+        image: alpine/git:latest
+        command: [sh]
+        source: |
+          set -e
+          
+          SERVICE="{{workflow.parameters.service}}"
+          ENV="{{workflow.parameters.environment}}"
+          VERSION="{{workflow.parameters.version}}"
+          REPO_URL="https://github.com/yourusername/applications.git"
+          
+          echo "📝 Actualizando valores para ${SERVICE} en ${ENV}"
+          
+          git clone ${REPO_URL} /workspace
+          cd /workspace
+          
+          VALUES_FILE="services/${SERVICE}/helm/values-${ENV}.yaml"
+          
+          if [ ! -f "$VALUES_FILE" ]; then
+            echo "❌ Archivo de valores no encontrado: $VALUES_FILE"
+            exit 1
+          fi
+          
+          sed -i "s/tag: .*/tag: \"${VERSION}\"/" $VALUES_FILE
+          
+          echo "✅ Valores actualizados"
+          cat $VALUES_FILE | grep tag
+    
+    - name: commit-push
+      script:
+        image: alpine/git:latest
+        command: [sh]
+        source: |
+          set -e
+          
+          cd /workspace
+          
+          git config user.email "argo-workflows@company.com"
+          git config user.name "Argo Workflows Bot"
+          
+          BRANCH="{{workflow.parameters.environment}}"
+          git checkout $BRANCH 2>/dev/null || git checkout -b $BRANCH
+          
+          git add services/{{workflow.parameters.service}}/helm/values-{{workflow.parameters.environment}}.yaml
+          git commit -m "chore(deploy): update {{workflow.parameters.service}} to {{workflow.parameters.version}} for {{workflow.parameters.environment}}"
+          git push origin $BRANCH
+          
+          echo "✅ Cambios push a GitHub"
+    
+    - name: wait-argocd-sync
+      script:
+        image: argoproj/argocd:latest
+        command: [sh]
+        source: |
+          set -e
+          
+          APPLICATION="{{workflow.parameters.service}}-{{workflow.parameters.environment}}"
+          
+          echo "⏳ Esperando sincronización de Argo CD..."
+          
+          for i in {1..60}; do
+            STATUS=$(argocd app get $APPLICATION \
+              --server argocd-server.argocd.svc.cluster.local \
+              --plaintext \
+              -o json | jq -r .status.sync.status 2>/dev/null || echo "Unknown")
+            
+            if [ "$STATUS" == "Synced" ]; then
+              echo "✅ Aplicación sincronizada: $APPLICATION"
+              exit 0
+            fi
+            
+            echo "⏳ Estado actual: $STATUS. Esperando 10s... ($i/60)"
+            sleep 10
+          done
+          
+          echo "❌ Timeout esperando sincronización de Argo CD"
+          exit 1

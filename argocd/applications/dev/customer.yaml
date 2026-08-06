@@ -1,0 +1,34 @@
+apiVersion: argoproj.io/v1alpha1
+kind: Application
+metadata:
+  name: customer-dev
+  namespace: argocd
+  labels:
+    environment: dev
+    service: customer
+    team: platform
+spec:
+  project: default
+  source:
+    repoURL: https://github.com/yourusername/applications.git
+    targetRevision: dev
+    path: services/customer-service/helm
+    helm:
+      valueFiles:
+        - values-dev.yaml
+  destination:
+    server: https://kubernetes.default.svc
+    namespace: apps-dev
+  syncPolicy:
+    automated:
+      prune: true
+      selfHeal: true
+    syncOptions:
+      - CreateNamespace=true
+      - ApplyOutOfSyncOnly=true
+    retry:
+      limit: 3
+      backoff:
+        duration: 5s
+        factor: 2
+        maxDuration: 60s
