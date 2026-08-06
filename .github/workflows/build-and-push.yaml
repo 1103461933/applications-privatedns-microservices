@@ -3,7 +3,7 @@ name: Build and Push Docker Image
 on:
   push:
     branches:
-      - dev
+      - main
     paths:
       - 'services/**'
   workflow_dispatch:
@@ -30,7 +30,7 @@ jobs:
   build-and-push:
     runs-on: ubuntu-latest
     environment: dev
-    
+
     strategy:
       matrix:
         service:
@@ -74,7 +74,6 @@ jobs:
             ${{ env.DOCKER_USERNAME }}/${{ matrix.service }}:latest
 
       - name: Update Helm values (DEV)
-        if: github.ref == 'refs/heads/dev' || github.event_name == 'workflow_dispatch'
         run: |
           SERVICE="${{ matrix.service }}"
           VERSION="${{ steps.version.outputs.version }}"
@@ -90,13 +89,12 @@ jobs:
           echo "✅ Updated ${VALUES_FILE} with tag ${VERSION}"
           cat $VALUES_FILE | grep tag
 
-      - name: Commit and push changes (DEV)
-        if: github.ref == 'refs/heads/dev'
+      - name: Commit and push changes
         run: |
           git config user.name "GitHub Actions Bot"
           git config user.email "actions@github.com"
           
-          git checkout dev || git checkout -b dev
+          git checkout main
           git add services/*/helm/values-dev.yaml
           git commit -m "chore: update images to version ${{ steps.version.outputs.version }} for DEV" || echo "No changes to commit"
-          git push origin dev
+          git push origin main
