@@ -6,7 +6,7 @@ on:
       - main
     paths:
       - 'services/**'
-      - '!services/**/helm/**'
+      - '!services/**/helm/**' # Rompe el bucle
   workflow_dispatch:
     inputs:
       service:
@@ -14,6 +14,7 @@ on:
         required: true
         type: choice
         options:
+          # 1. VERIFICACIÓN EN EL FORMULARIO MANUAL <--- AQUÍ
           - booking-service
           - payment-service
           - customer-service
@@ -25,8 +26,6 @@ on:
         default: '1.0.0'
 
 jobs:
-  # JOB 1: SETUP - Determinamos servicios y versión
-  # Cargamos el ambiente aquí también por si hay variables de entorno específicas
   setup:
     runs-on: ubuntu-latest
     environment: dev
@@ -36,6 +35,7 @@ jobs:
     steps:
       - id: set-services
         run: |
+          # 2. VERIFICACIÓN EN LA LÓGICA DE AUTOMATIZACIÓN (PUSH) <--- AQUÍ
           if [ "${{ github.event_name }}" == "push" ] || [ "${{ github.event.inputs.service }}" == "all" ]; then
             echo 'services=["booking-service", "payment-service", "customer-service"]' >> $GITHUB_OUTPUT
           else
@@ -50,13 +50,13 @@ jobs:
             echo "version=${GITHUB_SHA::7}" >> $GITHUB_OUTPUT
           fi
 
-  # JOB 2: BUILD AND PUSH - Usa matrix para ser rápido
   build-and-push:
     needs: setup
     runs-on: ubuntu-latest
-    environment: dev # CARGA DE AMBIENTE PARA DOCKER_USERNAME/PASSWORD
+    environment: dev
     strategy:
       matrix:
+        # La matrix tomará dinámicamente 1 o los 3 servicios según el job anterior
         service: ${{ fromJSON(needs.setup.outputs.services) }}
     
     steps:
@@ -81,11 +81,10 @@ jobs:
             ${{ secrets.DOCKER_USERNAME }}/${{ matrix.service }}:${{ needs.setup.outputs.version }}
             ${{ secrets.DOCKER_USERNAME }}/${{ matrix.service }}:latest
 
-  # JOB 3: UPDATE HELM - Un solo commit final para evitar inconsistencias
   update-helm:
     needs: [setup, build-and-push]
     runs-on: ubuntu-latest
-    environment: dev # CARGA DE AMBIENTE PARA EL PAT_TOKEN
+    environment: dev
     steps:
       - name: Checkout code
         uses: actions/checkout@v3
@@ -97,16 +96,19 @@ jobs:
           VERSION="${{ needs.setup.outputs.version }}"
           SERVICES_JSON='${{ needs.setup.outputs.services }}'
           
-          # jq procesa la lista de servicios que calculamos en el setup
+          # 3. VERIFICACIÓN EN LA ACTUALIZACIÓN DE HELM <--- AQUÍ
+          # jq procesará booking-service, payment-service y customer-service si vienen en el JSON
           for SERVICE in $(echo $SERVICES_JSON | jq -r '.[]'); do
             VALUES_FILE="services/${SERVICE}/helm/values-dev.yaml"
             if [ -f "$VALUES_FILE" ]; then
               sed -i "s/tag: .*/tag: \"${VERSION}\"/" $VALUES_FILE
-              echo "✅ Updated ${SERVICE} to ${VERSION}"
+              echo "✅ Actualizado $SERVICE a la versión $VERSION"
+            else
+              echo "⚠️ Archivo $VALUES_FILE no encontrado para el servicio $SERVICE"
             fi
           done
 
-      - name: Commit and push changes
+      - name: Commit and push
         run: |
           git config user.name "GitHub Actions Bot"
           git config user.email "actions@github.com"
@@ -114,6 +116,5 @@ jobs:
           git add services/*/helm/values-dev.yaml
           git commit -m "chore: update images to version ${{ needs.setup.outputs.version }} [skip ci]" || echo "No changes to commit"
           
-          # Pull rebase por si otro workflow terminó justo antes
           git pull --rebase origin main
           git push origin main
