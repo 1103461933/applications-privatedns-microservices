@@ -2,7 +2,7 @@ replicaCount: 1
 
 image:
   repository: yourusername/customer-service
-  tag: "fb3f560"
+  tag: "1.0.5"
   pullPolicy: Always
 
 ingress:
