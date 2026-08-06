@@ -30,7 +30,8 @@ env:
 jobs:
   build-and-push:
     runs-on: ubuntu-latest
-
+    environment: dev  # ← AGREGAR ESTA LÍNEA (usa el ambiente dev)
+    
     strategy:
       matrix:
         service:
@@ -73,35 +74,42 @@ jobs:
             ${{ env.DOCKER_USERNAME }}/${{ matrix.service }}:${{ steps.version.outputs.version }}
             ${{ env.DOCKER_USERNAME }}/${{ matrix.service }}:latest
 
-      - name: Update Helm values
-        if: github.event_name == 'workflow_dispatch'
-        uses: actions/github-script@v6
-        with:
-          script: |
-            const service = '${{ github.event.inputs.service }}';
-            const version = '${{ steps.version.outputs.version }}';
-            const fs = require('fs');
-            const yaml = require('js-yaml');
-            
-            // Actualizar values-dev.yaml
-            const valuesFile = `services/${service}/helm/values-dev.yaml`;
-            let doc = yaml.load(fs.readFileSync(valuesFile, 'utf8'));
-            doc.image.tag = version;
-            fs.writeFileSync(valuesFile, yaml.dump(doc));
-            
-            // Actualizar values-prod.yaml
-            const prodFile = `services/${service}/helm/values-prod.yaml`;
-            if (fs.existsSync(prodFile)) {
-              let prod = yaml.load(fs.readFileSync(prodFile, 'utf8'));
-              prod.image.tag = version;
-              fs.writeFileSync(prodFile, yaml.dump(prod));
-            }
+      - name: Update Helm values (DEV)
+        if: github.ref == 'refs/heads/dev'
+        run: |
+          SERVICE="${{ matrix.service }}"
+          VERSION="${{ steps.version.outputs.version }}"
+          VALUES_FILE="services/${SERVICE}/helm/values-dev.yaml"
+          
+          sed -i "s/tag: .*/tag: \"${VERSION}\"/" $VALUES_FILE
+          
+          echo "✅ Updated ${VALUES_FILE} with tag ${VERSION}"
+
+      - name: Update Helm values (PROD)
+        if: github.ref == 'refs/heads/main'
+        run: |
+          SERVICE="${{ matrix.service }}"
+          VERSION="${{ steps.version.outputs.version }}"
+          VALUES_FILE="services/${SERVICE}/helm/values-prod.yaml"
+          
+          sed -i "s/tag: .*/tag: \"${VERSION}\"/" $VALUES_FILE
+          
+          echo "✅ Updated ${VALUES_FILE} with tag ${VERSION}"
 
       - name: Commit and push changes
-        if: github.event_name == 'workflow_dispatch'
         run: |
           git config user.name "GitHub Actions Bot"
           git config user.email "actions@github.com"
+          
+          if [ "${{ github.ref }}" == "refs/heads/dev" ]; then
+            BRANCH="dev"
+          elif [ "${{ github.ref }}" == "refs/heads/main" ]; then
+            BRANCH="main"
+          else
+            BRANCH="${{ github.ref_name }}"
+          fi
+          
+          git checkout $BRANCH
           git add services/*/helm/values-*.yaml
-          git commit -m "chore: update images to ${{ steps.version.outputs.version }}" || echo "No changes to commit"
-          git push
+          git commit -m "chore: update images to version ${{ steps.version.outputs.version }}" || echo "No changes to commit"
+          git push origin $BRANCH
