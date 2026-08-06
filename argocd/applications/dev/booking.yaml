@@ -10,7 +10,7 @@ metadata:
 spec:
   project: default
   source:
-    repoURL: https://github.com/yourusername/applications.git
+    repoURL: https://github.com/1103461933/applications-privatedns-microservices.git
     targetRevision: dev
     path: services/booking-service/helm
     helm:
