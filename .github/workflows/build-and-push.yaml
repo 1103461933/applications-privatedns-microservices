@@ -4,7 +4,6 @@ on:
   push:
     branches:
       - dev
-      - main
     paths:
       - 'services/**'
   workflow_dispatch:
@@ -30,7 +29,7 @@ env:
 jobs:
   build-and-push:
     runs-on: ubuntu-latest
-    environment: dev  # ← AGREGAR ESTA LÍNEA (usa el ambiente dev)
+    environment: dev
     
     strategy:
       matrix:
@@ -75,31 +74,29 @@ jobs:
             ${{ env.DOCKER_USERNAME }}/${{ matrix.service }}:latest
 
       - name: Update Helm values (DEV)
-        if: github.ref == 'refs/heads/dev'
+        if: github.ref == 'refs/heads/dev' || github.event_name == 'workflow_dispatch'
         run: |
           SERVICE="${{ matrix.service }}"
           VERSION="${{ steps.version.outputs.version }}"
           VALUES_FILE="services/${SERVICE}/helm/values-dev.yaml"
           
+          if [ ! -f "$VALUES_FILE" ]; then
+            echo "⚠️  $VALUES_FILE no existe"
+            exit 1
+          fi
+          
           sed -i "s/tag: .*/tag: \"${VERSION}\"/" $VALUES_FILE
           
           echo "✅ Updated ${VALUES_FILE} with tag ${VERSION}"
+          cat $VALUES_FILE | grep tag
 
-
-      - name: Commit and push changes
+      - name: Commit and push changes (DEV)
+        if: github.ref == 'refs/heads/dev'
         run: |
           git config user.name "GitHub Actions Bot"
           git config user.email "actions@github.com"
           
-          if [ "${{ github.ref }}" == "refs/heads/dev" ]; then
-            BRANCH="dev"
-          elif [ "${{ github.ref }}" == "refs/heads/main" ]; then
-            BRANCH="main"
-          else
-            BRANCH="${{ github.ref_name }}"
-          fi
-          
-          git checkout $BRANCH
-          git add services/*/helm/values-*.yaml
-          git commit -m "chore: update images to version ${{ steps.version.outputs.version }}" || echo "No changes to commit"
-          git push origin $BRANCH
+          git checkout dev || git checkout -b dev
+          git add services/*/helm/values-dev.yaml
+          git commit -m "chore: update images to version ${{ steps.version.outputs.version }} for DEV" || echo "No changes to commit"
+          git push origin dev
