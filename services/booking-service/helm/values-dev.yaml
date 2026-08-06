@@ -2,7 +2,7 @@ replicaCount: 1
 
 image:
   repository: yourusername/booking-service
-  tag: "d4c0650"
+  tag: "ddcf34e"
   pullPolicy: Always
 
 ingress:
