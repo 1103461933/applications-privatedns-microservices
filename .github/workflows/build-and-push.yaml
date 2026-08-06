@@ -17,7 +17,7 @@ on:
           - booking-service
           - payment-service
           - customer-service
-          - all # Añadí esta opción por si quieres relanzar todo manualmente
+          - all
       version:
         description: 'Version tag (e.g., 1.0.0)'
         required: true
@@ -29,34 +29,40 @@ env:
   DOCKER_PASSWORD: ${{ secrets.DOCKER_PASSWORD }}
 
 jobs:
+  # JOB 1: DETERMINAR QUÉ SERVICIOS CONSTRUIR
+  setup:
+    runs-on: ubuntu-latest
+    outputs:
+      services: ${{ steps.set-services.outputs.services }}
+      version: ${{ steps.set-version.outputs.version }}
+    steps:
+      - id: set-services
+        run: |
+          if [ "${{ github.event_name }}" == "push" ] || [ "${{ github.event.inputs.service }}" == "all" ]; then
+            echo 'services=["booking-service", "payment-service", "customer-service"]' >> $GITHUB_OUTPUT
+          else
+            echo 'services=["${{ github.event.inputs.service }}"]' >> $GITHUB_OUTPUT
+          fi
+      
+      - id: set-version
+        run: |
+          if [ "${{ github.event_name }}" == "workflow_dispatch" ]; then
+            echo "version=${{ github.event.inputs.version }}" >> $GITHUB_OUTPUT
+          else
+            echo "version=${GITHUB_SHA::7}" >> $GITHUB_OUTPUT
+          fi
+
+  # JOB 2: CONSTRUCCIÓN (EN PARALELO SEGÚN LA MATRIX)
   build-and-push:
+    needs: setup
     runs-on: ubuntu-latest
     strategy:
-      # Si es manual y no elegiste "all", solo corre el servicio seleccionado
-      # Si es push, corre los 3
       matrix:
-        service: >-
-          ${{ 
-            github.event.inputs.service == 'all' || github.event_name == 'push' 
-            ? fromJSON('["booking-service", "payment-service", "customer-service"]') 
-            : fromJSON(format('["{0}"]', github.event.inputs.service)) 
-          }}
-    outputs:
-      version: ${{ steps.version.outputs.version }}
+        service: ${{ fromJSON(needs.setup.outputs.services) }}
     
     steps:
       - name: Checkout code
         uses: actions/checkout@v3
-
-      - name: Get version
-        id: version
-        run: |
-          if [ "${{ github.event_name }}" == "workflow_dispatch" ]; then
-            VERSION="${{ github.event.inputs.version }}"
-          else
-            VERSION="${GITHUB_SHA::7}"
-          fi
-          echo "version=$VERSION" >> $GITHUB_OUTPUT
 
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@v2
@@ -73,11 +79,12 @@ jobs:
           context: services/${{ matrix.service }}
           push: true
           tags: |
-            ${{ env.DOCKER_USERNAME }}/${{ matrix.service }}:${{ steps.version.outputs.version }}
+            ${{ env.DOCKER_USERNAME }}/${{ matrix.service }}:${{ needs.setup.outputs.version }}
             ${{ env.DOCKER_USERNAME }}/${{ matrix.service }}:latest
 
+  # JOB 3: ACTUALIZAR HELM (UN SOLO COMMIT AL FINAL PARA EVITAR CONFLICTOS)
   update-helm:
-    needs: build-and-push
+    needs: [setup, build-and-push]
     runs-on: ubuntu-latest
     steps:
       - name: Checkout code
@@ -87,22 +94,16 @@ jobs:
 
       - name: Update Helm tags
         run: |
-          VERSION="${{ needs.build-and-push.outputs.version }}"
+          VERSION="${{ needs.setup.outputs.version }}"
+          # Convertimos el string JSON de servicios en un array de bash
+          SERVICES_JSON='${{ needs.setup.outputs.services }}'
+          SERVICES=$(echo $SERVICES_JSON | jq -r '.[]')
           
-          # Si fue manual, solo actualizamos ese servicio. Si fue push, los 3.
-          if [ "${{ github.event_name }}" == "workflow_dispatch" ] && [ "${{ github.event.inputs.service }}" != "all" ]; then
-            SERVICES=("${{ github.event.inputs.service }}")
-          else
-            SERVICES=("booking-service" "payment-service" "customer-service")
-          fi
-          
-          for SERVICE in "${SERVICES[@]}"; do
+          for SERVICE in $SERVICES; do
             VALUES_FILE="services/${SERVICE}/helm/values-dev.yaml"
             if [ -f "$VALUES_FILE" ]; then
               sed -i "s/tag: .*/tag: \"${VERSION}\"/" $VALUES_FILE
               echo "✅ Updated ${SERVICE} to ${VERSION}"
-            else
-              echo "⚠️  $VALUES_FILE no existe, saltando..."
             fi
           done
 
@@ -112,8 +113,7 @@ jobs:
           git config user.email "actions@github.com"
           
           git add services/*/helm/values-dev.yaml
-          git commit -m "chore: update images to version ${{ needs.build-and-push.outputs.version }} [skip ci]" || echo "No changes to commit"
+          git commit -m "chore: update images to version ${{ needs.setup.outputs.version }} [skip ci]" || echo "No changes to commit"
           
-          # Manejo de concurrencia: si otro job terminó justo antes, rebasamos
           git pull --rebase origin main
           git push origin main
