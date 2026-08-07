@@ -11,7 +11,7 @@ spec:
   project: default
   source:
     repoURL: https://github.com/1103461933/applications-privatedns-microservices.git
-    targetRevision: dev
+    targetRevision: main
     path: services/customer-service/helm
     helm:
       valueFiles:
